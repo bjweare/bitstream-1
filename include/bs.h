@@ -238,6 +238,15 @@ static inline int32_t bs_read_se(bs_t* b, int* usedbits)
     return r;
 }
 
+//me(v) used for coded_block_pattern
+static inline int32_t bs_read_me(bs_t* b, int* usedbits) 
+{
+    int32_t r = bs_read_ue(b,usedbits);	//codeNum
+
+    return r;
+}
+
+
 //te(v) only for ref_idx_l0[ mbPartIdx ] ref_idx_l1[ mbPartIdx ]
 static inline int32_t bs_read_te(bs_t *b, int x, int * usedbits)
 {

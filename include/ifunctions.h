@@ -14,5 +14,9 @@ static inline int imax(int a, int b)
   return ((a) > (b)) ? (a) : (b);
 }
 
+static inline int iabs(int a)
+{
+	return ((a) >= 0) ? (a) : ((a)*(-1));
+}
 
 #endif

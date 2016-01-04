@@ -19,7 +19,6 @@
 #include "define.h"
 #include "fmo.h"
 
-//#define PRINT_FMO_MAPS
 
 static void FmoGenerateType0MapUnitMap (h264_stream_t *h, unsigned PicSizeInMapUnits );
 static void FmoGenerateType1MapUnitMap (h264_stream_t *h, unsigned PicSizeInMapUnits );

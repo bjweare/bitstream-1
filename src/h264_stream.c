@@ -48,7 +48,7 @@ MbPartPredMode_e I_slice_MbPartPredMode(int mb_type, int transform_size_8x8_flag
 
 /***宏块***/
 //n: 代表宏块的第n个分区
-MbPartPredMode_e MbPartPredMode(macroblock_layer_t* mbl, int slice_type, int mb_type, int n)
+MbPartPredMode_e MbPartPredMode(slice_data_t* mbl, int slice_type, int mb_type, int n)
 {
 	MbPartPredMode_e ret = Na;
 
@@ -232,7 +232,9 @@ int NumSubMbPart(int sub_mb_type, int slice_type)
 
 FILE* h264_dbgfile = NULL;
 
+#ifndef PRINT_TO_STDOUT
 #define printf(...) fprintf((h264_dbgfile == NULL ? stdout : h264_dbgfile), __VA_ARGS__)
+#endif
 
 /** 
  Calculate the log base 2 of the argument, rounded up. 
@@ -259,6 +261,23 @@ int is_slice_type(int slice_type, int cmp_type)
     else { return 0; }
 }
 
+//cbp = NCBP[chroma_format_idc][codeNum][intra_4x4,intra_8x8/inter]
+static const byte NCBP[2][48][2]=
+{
+  {  // 0      1        2       3       4       5       6       7       8       9      10      11
+    {15, 0},{ 0, 1},{ 7, 2},{11, 4},{13, 8},{14, 3},{ 3, 5},{ 5,10},{10,12},{12,15},{ 1, 7},{ 2,11},
+    { 4,13},{ 8,14},{ 6, 6},{ 9, 9},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},
+    { 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},
+    { 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0},{ 0, 0}
+  },
+  {
+    {47, 0},{31,16},{15, 1},{ 0, 2},{23, 4},{27, 8},{29,32},{30, 3},{ 7, 5},{11,10},{13,12},{14,15},
+    {39,47},{43, 7},{45,11},{46,13},{16,14},{ 3, 6},{ 5, 9},{10,31},{12,35},{19,37},{21,42},{26,44},
+    {28,33},{35,34},{37,36},{42,40},{44,39},{ 1,43},{ 2,45},{ 4,46},{ 8,17},{17,18},{18,20},{20,24},
+    {24,19},{ 6,21},{ 9,26},{22,28},{25,23},{32,27},{33,29},{34,30},{36,22},{40,25},{38,38},{41,41}
+  }
+};
+
 /***************************** reading ******************************/
 
 /**
@@ -284,9 +303,9 @@ h264_stream_t* h264_new()
     h->sh = (slice_header_t*)calloc(1, sizeof(slice_header_t));
 
 	h->sd = (slice_data_t*)calloc(1, sizeof(slice_data_t));
-	h->sd->mbl = (macroblock_layer_t*)calloc(1, sizeof(macroblock_layer_t));
-	h->sd->mbl->mbp = (mb_pre_t*)calloc(1, sizeof(mb_pre_t));
-	h->sd->mbl->smbp = (sub_mb_pre_t*)calloc(1, sizeof(sub_mb_pre_t));
+	//h->sd->mbl = (macroblock_layer_t*)calloc(1, sizeof(macroblock_layer_t));
+	//h->sd->mbl->mbp = (mb_pre_t*)calloc(1, sizeof(mb_pre_t));
+	//h->sd->mbl->smbp = (sub_mb_pre_t*)calloc(1, sizeof(sub_mb_pre_t));
 
     return h;   
 }
@@ -593,7 +612,12 @@ int read_nal_unit(h264_stream_t* h, uint8_t* buf, int size)
             return 0;
     }
 
-    if (bs_overrun(b)) { bs_free(b); free(rbsp_buf); return -1; }
+    if (bs_overrun(b)) 
+	{ 
+		bs_free(b); 
+		free(rbsp_buf); 
+		return -1; 
+	}
 
     bs_free(b); 
     free(rbsp_buf);
@@ -1077,7 +1101,9 @@ void read_slice_layer_rbsp(h264_stream_t* h,  bs_t* b)
 
     if ( slice_data != NULL )
     {
-        if ( slice_data->rbsp_buf != NULL ) free( slice_data->rbsp_buf ); 
+        if ( slice_data->rbsp_buf != NULL ) 
+			free( slice_data->rbsp_buf ); 
+		
         uint8_t *sptr = b->p + (!!b->bits_left); // CABAC-specific: skip alignment bits, if there are any
         slice_data->rbsp_size = b->end - sptr;
         
@@ -1482,6 +1508,7 @@ int read_slice_data(h264_stream_t* h, bs_t* b)
 	Fmo_init(h);	//init the FmoGetNextMBNr()
 	
     do {
+		//P/B slice
         if( ! is_slice_type( sh->slice_type, SH_SLICE_TYPE_I ) && ! is_slice_type( sh->slice_type, SH_SLICE_TYPE_SI ) )
         {
             if( pps->entropy_coding_mode_flag == CAVLC) 
@@ -1501,7 +1528,7 @@ int read_slice_data(h264_stream_t* h, bs_t* b)
 		
         if( moreDataFlag ) 
 		{
-            if( MbaffFrameFlag && 
+            if( MbaffFrameFlag && //场编码
 				( CurrMbAddr % 2 == 0 || ( CurrMbAddr % 2 == 1 && prevMbSkipped ) ) )
             {
 				if(pps->entropy_coding_mode_flag == CAVLC)
@@ -1513,6 +1540,7 @@ int read_slice_data(h264_stream_t* h, bs_t* b)
 			/***宏块层语法元素解析***/
             read_macroblock_layer(h, b);
         }
+		
         if( pps->entropy_coding_mode_flag == CAVLC)
             moreDataFlag = more_rbsp_data(h, b);
         else 
@@ -1528,6 +1556,7 @@ int read_slice_data(h264_stream_t* h, bs_t* b)
         }
 		
         CurrMbAddr = FmoGetNextMBNr(h, CurrMbAddr);	//NextMbAddress( CurrMbAddr )
+        printf("currmbaddr: %d\n",CurrMbAddr);
     } while( moreDataFlag );
 
 	return usedbits;
@@ -1543,8 +1572,8 @@ int read_macroblock_layer(h264_stream_t* h, bs_t* b)
 	slice_header_t* sh = h->sh;	
 	slice_data_t* sd = h->sd;
 	
-	macroblock_layer_t* mbl = sd->mbl;
-	memset(mbl, 0, sizeof(macroblock_layer_t));
+	//macroblock_layer_t* mbl = sd->mbl;
+	//memset(mbl, 0, sizeof(macroblock_layer_t));
 	
 	int mb_type;
 
@@ -1553,21 +1582,21 @@ int read_macroblock_layer(h264_stream_t* h, bs_t* b)
 	else
 		mb_type = 0;	//ae(v)
 	
-	mbl->mb_type = mb_type;
+	sd->mb_type = mb_type;
 	
 	if( mb_type == I_PCM ) 
 	{ 
 		while( !bs_byte_aligned(b) )
 		{
 			usedbits += 1;
-			mbl->pcm_alignment_zero_bit = bs_read_f(b,1);	// 3 f(1) 
+			sd->pcm_alignment_zero_bit = bs_read_f(b,1);	// 3 f(1) 
 		}
 
 		int bitdepth_luma = sps->bit_depth_luma_minus8 + 8;
 		int tmp = 0;
 
 		for( i = 0; i < 256; i++ ) 
-			mbl->pcm_sample_luma[i] = bs_read_u(b, bitdepth_luma);// 3 u(v) 
+			sd->pcm_sample_luma[i] = bs_read_u(b, bitdepth_luma);// 3 u(v) 
 
 		int bitdepth_chroma = sps->bit_depth_chroma_minus8 + 8;
 		int MbWidthC = 0, MbHeightC = 0;
@@ -1595,7 +1624,7 @@ int read_macroblock_layer(h264_stream_t* h, bs_t* b)
 		}
 
 		for( i = 0; i < 2 * MbWidthC * MbHeightC; i++ ) 
-			mbl->pcm_sample_chroma[i] = bs_read_u(b, bitdepth_chroma);	// 3 u(v) 
+			sd->pcm_sample_chroma[i] = bs_read_u(b, bitdepth_chroma);	// 3 u(v) 
 	} 
 	else 
 	{ 
@@ -1605,7 +1634,7 @@ int read_macroblock_layer(h264_stream_t* h, bs_t* b)
 		MbPartPredMode_e PreMode;
 		
 		if( mb_type != I_NxN && 
-			MbPartPredMode(mbl,slice_type,mb_type,0) != Intra_16x16 && 
+			MbPartPredMode(sd,slice_type,mb_type,0) != Intra_16x16 && 
 			NumMbPart(slice_type,mb_type) == 4 ) 
 		{ 
 			/***子宏块预测语法***/		
@@ -1614,18 +1643,16 @@ int read_macroblock_layer(h264_stream_t* h, bs_t* b)
 			else
 				;//read_sub_mb_pred_cabac();
 
-			#if 0
 			for( int mbPartIdx = 0; mbPartIdx < 4; mbPartIdx++ )
 			{
-				if( sub_mb_type[mbPartIdx] != B_Direct_8x8 ) 
+				if( sd->smbp.sub_mb_type[mbPartIdx] != B_Direct_8x8 ) 
 				{ 
-					if( NumSubMbPart( sub_mb_type[mbPartIdx] ) > 1 ) 
+					if( NumSubMbPart( sd->smbp.sub_mb_type[mbPartIdx] ) > 1 ) 
 						noSubMbPartSizeLessThan8x8Flag = 0 
 				} 
 				else if( !sps->direct_8x8_inference_flag ) 
 					noSubMbPartSizeLessThan8x8Flag = 0 
 			}
-			#endif
 		}
 		else 
 		{ 
@@ -1634,11 +1661,11 @@ int read_macroblock_layer(h264_stream_t* h, bs_t* b)
 				if(pps->entropy_coding_mode_flag == CAVLC)
 				{
 					usedbits += 1;
-					mbl->transform_size_8x8_flag = bs_read_u1(b);;// 2 u(1) 
+					sd->transform_size_8x8_flag = bs_read_u1(b);// 2 u(1) 
 				}
 				else
 				{
-					mbl->transform_size_8x8_flag = 0;// 2 ae(v)
+					sd->transform_size_8x8_flag = 0;// 2 ae(v)
 				}
 			}
 
@@ -1649,26 +1676,34 @@ int read_macroblock_layer(h264_stream_t* h, bs_t* b)
 				;//read_mb_pred_cabac();
 		} 
 
-		#if 0
-		if( MbPartPredMode(mbl,slice_type,mb_type,0) != Intra_16x16 ) 
+		if( MbPartPredMode(sd,slice_type,mb_type,0) != Intra_16x16 ) 
 		{ 
-			mbl->coded_block_pattern // 2 me(v) | ae(v) 
-			if( CodedBlockPatternLuma > 0 && pps->transform_8x8_mode_flag 
+			int codeNum = bs_read_ue(b,usedbits);
+			int tmp = 0;
+			if(MbPartPredMode(sd,slice_type,mb_type,0) != Intra_4x4 ||
+				MbPartPredMode(sd,slice_type,mb_type,0) != Intra_8x8)
+				tmp = 1;
+			
+			sd->coded_block_pattern = NCBP[sps->chroma_format_idc][codeNum][tmp]; // 2 me(v) | ae(v) 
+
+			h->CodedBlockPatternLuma = sd->coded_block_pattern % 16;
+			if( h->CodedBlockPatternLuma > 0 && pps->transform_8x8_mode_flag 
 				&& mb_type != I_NxN && noSubMbPartSizeLessThan8x8Flag 
 				&& ( mb_type != B_Direct_16x16 || sps->direct_8x8_inference_flag ) ) 
 				
-				mbl->transform_size_8x8_flag // 2 u(1) | ae(v) 
+				sd->transform_size_8x8_flag = bs_read_u1(b);// 2 u(1) | ae(v) 
 		} 
-
-		if( CodedBlockPatternLuma > 0 || CodedBlockPatternChroma > 0 
-			|| MbPartPredMode(mbl,slice_type,mb_type,0) == Intra_16x16 ) 
+		
+		h->CodedBlockPatternLuma = sd->coded_block_pattern %16;
+		h->CodedBlockPatternChroma = sd->coded_block_pattern /16;
+		if( h->CodedBlockPatternLuma > 0 || h->CodedBlockPatternChroma > 0 
+			|| MbPartPredMode(sd,slice_type,mb_type,0) == Intra_16x16 ) 
 		{ 
-			mbl->mb_qp_delta;// 2 se(v) | ae(v) 
+			sd->mb_qp_delta = bs_read_se(b, &usedbits);// 2 se(v) | ae(v) 
 
 			/***残差语法***/
-			//residual( 0, 15 ) // 3 | 4 
+			read_residual(); // 3 | 4 
 		} 
-		#endif
 	}
 }
 
@@ -1683,14 +1718,14 @@ void read_mb_pred_cavlc(h264_stream_t* h, bs_t* b,int mb_type)
 	slice_header_t* sh = h->sh;	
 	slice_data_t* sd = h->sd;
 	
-	macroblock_layer_t* mbl = sd->mbl;
+	//macroblock_layer_t* mbl = sd->mbl;
 
-	mb_pre_t* mbp;
-	memset(mbp, 0, sizeof(mb_pre_t));
+	//mb_pre_t* mbp;
+	//memset(mbp, 0, sizeof(mb_pre_t));
 
 	int slice_type = sh->slice_type;
 
-	int mbpartpremode0 = MbPartPredMode(mbl,slice_type,mb_type,0);
+	int mbpartpremode0 = MbPartPredMode(sd,slice_type,mb_type,0);
 	
 	if( mbpartpremode0 == Intra_4x4 || mbpartpremode0 == Intra_8x8 
 		|| mbpartpremode0 == Intra_16x16 ) 
@@ -1699,10 +1734,10 @@ void read_mb_pred_cavlc(h264_stream_t* h, bs_t* b,int mb_type)
 		{
 			for(int luma4x4BlkIdx=0; luma4x4BlkIdx<16; luma4x4BlkIdx++ ) 
 			{
-				mbp->prev_intra4x4_pred_mode_flag[luma4x4BlkIdx] = bs_read_u1(b); 	//u(1)
+				sd->mbp.prev_intra4x4_pred_mode_flag[luma4x4BlkIdx] = bs_read_u1(b); 	//u(1)
 				
-				if( !mbp->prev_intra4x4_pred_mode_flag[luma4x4BlkIdx] )
-					mbp->rem_intra4x4_pred_mode[luma4x4BlkIdx] = bs_read_u(b,3);	//u(3)
+				if( !sd->mbp.prev_intra4x4_pred_mode_flag[luma4x4BlkIdx] )
+					sd->mbp.rem_intra4x4_pred_mode[luma4x4BlkIdx] = bs_read_u(b,3);	//u(3)
 			}
 		}
 			
@@ -1710,15 +1745,15 @@ void read_mb_pred_cavlc(h264_stream_t* h, bs_t* b,int mb_type)
 		{
 			for(int luma8x8BlkIdx=0; luma8x8BlkIdx<4; luma8x8BlkIdx++ ) 
 			{
-				mbp->prev_intra8x8_pred_mode_flag[luma8x8BlkIdx] = bs_read_u1(b);	//u(1)
+				sd->mbp.prev_intra8x8_pred_mode_flag[luma8x8BlkIdx] = bs_read_u1(b);	//u(1)
 				
-				if( !mbp->prev_intra8x8_pred_mode_flag[luma8x8BlkIdx])
-					mbp->rem_intra8x8_pred_mode[ luma8x8BlkIdx ] = bs_read_u(b,3);	//u(3)
+				if( !sd->mbp.prev_intra8x8_pred_mode_flag[luma8x8BlkIdx])
+					sd->mbp.rem_intra8x8_pred_mode[ luma8x8BlkIdx ] = bs_read_u(b,3);	//u(3)
 			}
 		}
 		
 		if( sps->chroma_format_idc != 0 )
-			mbp->intra_chroma_pred_mode = bs_read_ue(b, &usedbits);	// 2	ue(v)
+			sd->mbp.intra_chroma_pred_mode = bs_read_ue(b, &usedbits);	// 2	ue(v)
 	} 
 	else if(mbpartpremode0 != Direct) 
 	{
@@ -1728,48 +1763,48 @@ void read_mb_pred_cavlc(h264_stream_t* h, bs_t* b,int mb_type)
 		int mbpartnum = NumMbPart(slice_type,mb_type);
 		for( mbPartIdx = 0; mbPartIdx < mbpartnum; mbPartIdx++)
 			if( ( pps->num_ref_idx_l0_active_minus1 > 0 || sd->mb_field_decoding_flag != sh->field_pic_flag ) 
-				&& MbPartPredMode(mbl,slice_type,mb_type,mbPartIdx ) != Pred_L1 )
+				&& MbPartPredMode(sd,slice_type,mb_type,mbPartIdx ) != Pred_L1 )
 			{
 				if(!h->MbaffFrameFlag || !sd->mb_field_decoding_flag)
 					x = sh->num_ref_idx_l0_active_minus1;
 				else
 					x = 2*sh->num_ref_idx_l0_active_minus1 + 1;
-				mbp->ref_idx_l0[ mbPartIdx ] = bs_read_te(b, x, &usedbits);// 2 te(v)
+				sd->mbp.ref_idx_l0[ mbPartIdx ] = bs_read_te(b, x, &usedbits);// 2 te(v)
 			}
 			
 		for( mbPartIdx = 0; mbPartIdx < mbpartnum; mbPartIdx++)
 			if( ( pps->num_ref_idx_l1_active_minus1 > 0 || sd->mb_field_decoding_flag != sh->field_pic_flag ) 
-				&& MbPartPredMode( mbl,slice_type,mb_type, mbPartIdx ) != Pred_L0 )
+				&& MbPartPredMode( sd,slice_type,mb_type, mbPartIdx ) != Pred_L0 )
 			{
 				if(!h->MbaffFrameFlag || !sd->mb_field_decoding_flag)
 					x = sh->num_ref_idx_l1_active_minus1;
 				else
 					x = 2*sh->num_ref_idx_l1_active_minus1 + 1;
-				mbp->ref_idx_l1[ mbPartIdx ] = bs_read_te(b, x, &usedbits); // 2 te(v)
+				sd->mbp.ref_idx_l1[ mbPartIdx ] = bs_read_te(b, x, &usedbits); // 2 te(v)
 			}
 
 		/***MVD***/
 		int tmp[2];
 		for( mbPartIdx = 0; mbPartIdx < mbpartnum; mbPartIdx++)
-			if( MbPartPredMode ( mbl,slice_type,mb_type, mbPartIdx ) != Pred_L1 )
+			if( MbPartPredMode ( sd,slice_type,mb_type, mbPartIdx ) != Pred_L1 )
 			{
 				for( compIdx = 0; compIdx < 2; compIdx++ )	//x,y方向
 				{
 					tmp[compIdx] = bs_read_se(b, &usedbits);
 					//mvd_l0[mbPartIdx][0][compIdx] = bs_read_se(b, &usedbits); // 2 se(v) 0:表示没有子宏块
 				}
-				printf("x: %d, y: %d\n",tmp[0],tmp[1]);
+				printf("mvd_l0: %d, %d\n",tmp[0],tmp[1]);
 			}
 					
 		for( mbPartIdx = 0; mbPartIdx < mbpartnum; mbPartIdx++)
-			if( MbPartPredMode( mbl,slice_type,mb_type, mbPartIdx ) != Pred_L0 )
+			if( MbPartPredMode( sd,slice_type,mb_type, mbPartIdx ) != Pred_L0 )
 			{
 				for( compIdx = 0; compIdx < 2; compIdx++ )
 				{
 					tmp[compIdx] = bs_read_se(b, &usedbits); 
 					//mvd_l1[mbPartIdx][0][compIdx] = bs_read_se(b, &usedbits); // 2 se(v)
 				}
-				printf("x: %d, y: %d\n",tmp[0],tmp[1]);
+				printf("mvd_l1: %d, %d\n",tmp[0],tmp[1]);
 			}
 	}
 }
@@ -1783,10 +1818,10 @@ void read_sub_mb_pred_cavlc(h264_stream_t* h, bs_t* b, int mb_type)
     nal_t* nal = h->nal;
 	slice_header_t* sh = h->sh;	
 	slice_data_t* sd = h->sd;	
-	macroblock_layer_t* mbl = sd->mbl;
+	//macroblock_layer_t* mbl = sd->mbl;
 
-	sub_mb_pre_t* smbp = mbl->smbp;
-	memset(smbp, 0, sizeof(sub_mb_pre_t));
+	//sub_mb_pre_t* smbp = mbl->smbp;
+	//memset(smbp, 0, sizeof(sub_mb_pre_t));
 
 	int slice_type = sh->slice_type;
 	int mbPartIdx,subMbPartIdx,compIdx,x;
@@ -1794,64 +1829,255 @@ void read_sub_mb_pred_cavlc(h264_stream_t* h, bs_t* b, int mb_type)
 	/***读取sub_mb_type***/
 	//P,B宏块类型的子宏块类型
 	for( mbPartIdx = 0; mbPartIdx < 4; mbPartIdx++ )
-		smbp->sub_mb_type[ mbPartIdx ] = bs_read_ue(b, &usedbits); // 2 ue(v)
+		sd->smbp.sub_mb_type[ mbPartIdx ] = bs_read_ue(b, &usedbits); // 2 ue(v)
 		
 	for( mbPartIdx = 0; mbPartIdx < 4; mbPartIdx++ )
 		if( (sh->num_ref_idx_l0_active_minus1 > 0 || sd->mb_field_decoding_flag != sh->field_pic_flag ) 
-			&& mb_type != P_8x8ref0 && smbp->sub_mb_type[ mbPartIdx ] != B_Direct_8x8 
-			&& SubMbPredMode(smbp->sub_mb_type[mbPartIdx], slice_type) != Pred_L1 )
+			&& mb_type != P_8x8ref0 && sd->smbp.sub_mb_type[ mbPartIdx ] != B_Direct_8x8 
+			&& SubMbPredMode(sd->smbp.sub_mb_type[mbPartIdx], slice_type) != Pred_L1 )
 		{
 			if(!h->MbaffFrameFlag || !sd->mb_field_decoding_flag)
 				x = sh->num_ref_idx_l0_active_minus1;
 			else
 				x = 2*sh->num_ref_idx_l0_active_minus1 + 1;
-			smbp->ref_idx_l0[ mbPartIdx ] = bs_read_te(b, x, &usedbits);// 2 te(v)
+			sd->smbp.ref_idx_l0[ mbPartIdx ] = bs_read_te(b, x, &usedbits);// 2 te(v)
 		}
 
 	/***读取参考帧序号***/
 	for( mbPartIdx = 0; mbPartIdx < 4; mbPartIdx++ )
 		if( ( sh->num_ref_idx_l1_active_minus1 > 0 || sd->mb_field_decoding_flag != sh->field_pic_flag ) 
-			&& smbp->sub_mb_type[ mbPartIdx ] != B_Direct_8x8 
-			&& SubMbPredMode( smbp->sub_mb_type[mbPartIdx], slice_type) != Pred_L0 )
+			&& sd->smbp.sub_mb_type[ mbPartIdx ] != B_Direct_8x8 
+			&& SubMbPredMode( sd->smbp.sub_mb_type[mbPartIdx], slice_type) != Pred_L0 )
 		{
 			if(!h->MbaffFrameFlag || !sd->mb_field_decoding_flag)
 				x = sh->num_ref_idx_l1_active_minus1;
 			else
 				x = 2*sh->num_ref_idx_l1_active_minus1 + 1;
-			smbp->ref_idx_l1[ mbPartIdx ] = bs_read_te(b, x, &usedbits); // 2 te(v)
+			sd->smbp.ref_idx_l1[ mbPartIdx ] = bs_read_te(b, x, &usedbits); // 2 te(v)
 		}
 
 	/***MVD***/
 	int tmp[2];
 	for( mbPartIdx = 0; mbPartIdx < 4; mbPartIdx++ )
-		if( smbp->sub_mb_type[ mbPartIdx ] != B_Direct_8x8 
-			&& SubMbPredMode( smbp->sub_mb_type[mbPartIdx], slice_type) != Pred_L1 )
+		if( sd->smbp.sub_mb_type[ mbPartIdx ] != B_Direct_8x8 
+			&& SubMbPredMode( sd->smbp.sub_mb_type[mbPartIdx], slice_type) != Pred_L1 )
 		{
-			for( subMbPartIdx = 0; subMbPartIdx < NumSubMbPart(smbp->sub_mb_type[mbPartIdx], slice_type); subMbPartIdx++)
+			for( subMbPartIdx = 0; subMbPartIdx < NumSubMbPart(sd->smbp.sub_mb_type[mbPartIdx], slice_type); subMbPartIdx++)
 			{
 				for( compIdx = 0; compIdx < 2; compIdx++ )
 				{
 					tmp[compIdx] = bs_read_se(b, &usedbits);
 					//mvd_l0[ mbPartIdx ][ subMbPartIdx ][ compIdx ] // 2	se(v)	
 				}					
-				printf("x: %d, y: %d\n",tmp[0],tmp[1]);
+				printf("mvd_l0: %d, %d\n",tmp[0],tmp[1]);
 			}
 		}
 						
 	for( mbPartIdx = 0; mbPartIdx < 4; mbPartIdx++ )
-		if( smbp->sub_mb_type[ mbPartIdx ] != B_Direct_8x8 
-			&& SubMbPredMode( smbp->sub_mb_type[mbPartIdx], slice_type) != Pred_L0 )
+		if( sd->smbp.sub_mb_type[ mbPartIdx ] != B_Direct_8x8 
+			&& SubMbPredMode( sd->smbp.sub_mb_type[mbPartIdx], slice_type) != Pred_L0 )
 		{
-			for( subMbPartIdx = 0; subMbPartIdx < NumSubMbPart( smbp->sub_mb_type[mbPartIdx], slice_type); subMbPartIdx++)
+			for( subMbPartIdx = 0; subMbPartIdx < NumSubMbPart( sd->smbp.sub_mb_type[mbPartIdx], slice_type); subMbPartIdx++)
 			{
 				for( compIdx = 0; compIdx < 2; compIdx++ )
 				{
 					tmp[compIdx] = bs_read_se(b, &usedbits);
 					//mvd_l1[ mbPartIdx ][ subMbPartIdx ][ compIdx ] // 2	se(v)
 				}
-				printf("x: %d, y: %d\n",tmp[0],tmp[1]);
+				printf("mvd_l1: %d, %d\n",tmp[0],tmp[1]);
 			}
 		}
+}
+
+int read_residual(h264_stream_t* h, bs_t* b) 
+{
+	int usedbits = 0;
+    slice_header_t* sh = h->sh;
+    sps_t* sps = h->sps;
+    pps_t* pps = h->pps;
+    nal_t* nal = h->nal;
+	slice_data_t* sd = h->sd;
+	
+	int mb_type = sd->mb_type;
+	int entropy_coding_mode_flag = pps->entropy_coding_mode_flag;
+	
+	if( entropy_coding_mode_flag == CAVLC)
+		residual_block = residual_block_cavlc
+	else
+		; //residual_block = residual_block_cabac
+		
+	if( MbPartPredMode( mb_type, 0 ) == Intra_16x16 )
+		residual_block( Intra16x16DCLevel, 16 )
+		
+	for( int i8x8 = 0; i8x8 < 4; i8x8++ ) /* each luma 8x8 block */
+	{
+		if( !sd->transform_size_8x8_flag || entropy_coding_mode_flag == CAVLC )
+		{
+			for( int i4x4 = 0; i4x4 < 4; i4x4++ ) 
+			{ /* each 4x4 sub-block of block */
+				if( h->CodedBlockPatternLuma & ( 1 << i8x8 ) )
+				{
+					if( MbPartPredMode( mb_type, 0 ) == Intra_16x16 )
+						residual_block( Intra16x16ACLevel[ i8x8 * 4 + i4x4 ], 15 ) // 3
+					else
+						residual_block( LumaLevel[ i8x8 * 4 + i4x4 ], 16 ) // 3 | 4
+				}
+				else if( MbPartPredMode( mb_type, 0 ) == Intra_16x16 )
+				{
+					for( int i = 0; i < 15; i++ )
+						Intra16x16ACLevel[ i8x8 * 4 + i4x4 ][ i ] = 0
+				}
+				else
+				{
+					for( int i = 0; i < 16; i++ )
+						LumaLevel[ i8x8 * 4 + i4x4 ][ i ] = 0
+				}
+				
+				if( entropy_coding_mode_flag == CAVLC && sd->transform_size_8x8_flag )
+				{
+					for( int i = 0; i < 16; i++ )
+						LumaLevel8x8[ i8x8 ][ 4 * i + i4x4 ] = LumaLevel[ i8x8 * 4 + i4x4 ][ i ]
+				}
+			}
+		}
+		else if( h->CodedBlockPatternLuma & ( 1 << i8x8 ) )
+			residual_block( LumaLevel8x8[ i8x8 ], 64 ) // 3 | 4
+		else
+		{
+			for( int i = 0; i < 64; i++ )
+				LumaLevel8x8[ i8x8 ][ i ] = 0
+		}
+	}
+				
+	if( sps->chroma_format_idc != 0 ) 
+	{
+		int SubWidthC,SubHeightC;
+		switch(sps->chroma_format_idc)
+		{
+			case 1:
+				SubWidthC = 2; SubHeightC = 2;
+				break;
+			case 2:
+				SubWidthC = 2; SubHeightC = 1;					
+				break;
+			case 3:
+				SubWidthC = 1; SubHeightC = 1;					
+				break;
+			default:
+				break;
+		}
+		int NumC8x8 = 4 / ( SubWidthC * SubHeightC );
+		
+		for( int iCbCr = 0; iCbCr < 2; iCbCr++ )
+		{
+			if( h->CodedBlockPatternChroma & 3 ) /* chroma DC residual present */
+				residual_block( ChromaDCLevel[ iCbCr ], 4 * NumC8x8 ) 3 | 4
+			else
+				for( int i = 0; i < 4 * NumC8x8; i++ )
+					ChromaDCLevel[ iCbCr ][ i ] = 0
+		}
+		
+		for( int iCbCr = 0; iCbCr < 2; iCbCr++ )
+			for( int i8x8 = 0; i8x8 < NumC8x8; i8x8++ )
+				for( int i4x4 = 0; i4x4 < 4; i4x4++ )
+				{
+					if( h->CodedBlockPatternChroma & 2 )
+					/* chroma AC residual present */
+						residual_block( ChromaACLevel[ iCbCr ][ i8x8*4+i4x4 ], 15) 3 | 4
+					else
+					{
+						for( int i = 0; i < 15; i++ )
+							ChromaACLevel[ iCbCr ][ i8x8*4+i4x4 ][ i ] = 0
+					}
+				}
+	}
+}
+
+//coeffLevel[] a return par
+void residual_block_cavlc( coeffLevel, int maxNumCoeff ) 
+{
+	for( int i = 0; i < maxNumCoeff; i++ )
+		coeffLevel[ i ] = 0;
+	
+	int coeff_token;  // 3 | 4 ce(v)
+	
+	if( TotalCoeff( coeff_token ) > 0 ) 
+	{
+		int suffixLength;
+		int level[100]; //FIXME
+		int run[100]; 	//FIXME
+		
+		if( TotalCoeff( coeff_token ) > 10 && TrailingOnes( coeff_token ) < 3 )
+			suffixLength = 1;
+		else
+			suffixLength = 0;
+			
+		for( int i = 0; i < TotalCoeff( coeff_token ); i++ )
+		{
+			if( i < TrailingOnes( coeff_token ) ) 
+			{
+				int trailing_ones_sign_flag = bs_read_u1(b);  // 3 | 4 u(1)
+				level[ i ] = 1 – 2 * trailing_ones_sign_flag;
+	  	} 
+			else 
+			{
+				int level_prefix ;  // 3 | 4 ce(v)
+				int levelCode = ( imin( 15,level_prefix ) << suffixLength );
+				if( suffixLength > 0 || level_prefix >= 14 ) 
+				{
+					int level_suffix = bs_read_ue(b, NULL);   // 3 | 4 u(v)
+					levelCode += level_suffix;
+				}
+				
+				if( level_prefix >= 15 && suffixLength = = 0 )
+					levelCode += 15;
+				if( level_prefix >= 16 )
+					levelCode += ( 1 <<	( level_prefix – 3 ) ) – 4096;					
+				if( i == TrailingOnes( coeff_token ) && TrailingOnes( coeff_token ) < 3 )
+					levelCode += 2;
+				
+				if( levelCode % 2 == 0 )
+					level[ i ] = ( levelCode + 2 ) >> 1;
+				else
+					level[ i ] = ( (-1)*levelCode – 1 ) >> 1;
+					
+				if( suffixLength == 0 )
+					suffixLength = 1;
+				if( (iabs( level[ i ] ) > ( 3 << ( suffixLength – 1 ) )) && suffixLength < 6 )
+					suffixLength++
+			}
+		}
+
+		int zerosLeft;
+		if( TotalCoeff( coeff_token ) < maxNumCoeff ) 
+		{
+			int total_zeros;  //  3 | 4 ce(v)
+			zerosLeft = total_zeros;
+		} 
+		else
+			zerosLeft = 0
+			
+		for( int i = 0; i < TotalCoeff( coeff_token ) – 1; i++ ) 
+		{
+			if( zerosLeft > 0 ) 
+			{
+				int run_before;   // 3 | 4 ce(v)
+				run[ i ] = run_before;
+			} 
+			else
+				run[ i ] = 0;
+				zerosLeft = zerosLeft – run[ i ];
+		}
+
+		run[ TotalCoeff( coeff_token ) – 1 ] = zerosLeft;
+		
+		int coeffNum = -1;		
+		for( int i = TotalCoeff( coeff_token ) – 1; i >= 0; i-－) 
+		{
+			coeffNum += run[ i ] + 1
+			coeffLevel[ coeffNum ] = level[ i ]
+		}
+	}
 }
 
 

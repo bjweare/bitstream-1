@@ -261,6 +261,7 @@ typedef struct
 
 } slice_header_t;
 
+#if 0
 typedef struct
 {
 	int prev_intra4x4_pred_mode_flag[16];
@@ -303,6 +304,51 @@ typedef struct
 
 	macroblock_layer_t* mbl;
 }slice_data_t;
+#endif
+
+//slice_data_t
+typedef struct
+{
+	int cabac_alignment_one_bit;
+	int mb_skip_run;
+	int mb_skip_flag;
+	int mb_field_decoding_flag;
+	int end_of_slice_flag;
+
+	//macroblock_layer_t
+	int mb_type;
+	int pcm_alignment_zero_bit;
+	int pcm_sample_luma[256];
+	int pcm_sample_chroma[256];	//FIXME
+	int transform_size_8x8_flag;
+	int coded_block_pattern;
+	int mb_qp_delta;
+
+	int coded_block_pattern;
+	int transform_size_8x8_flag;
+	int mb_qp_delta;
+
+	//mb pre
+	struct
+	{
+		int prev_intra4x4_pred_mode_flag[16];
+		int rem_intra4x4_pred_mode[16];
+		int prev_intra8x8_pred_mode_flag[4];
+		int rem_intra8x8_pred_mode[4];
+		int intra_chroma_pred_mode;
+		int ref_idx_l0[4];
+		int ref_idx_l1[4];
+	}mbp;
+
+	//sub mb pre
+	struct
+	{
+		int sub_mb_type[4];
+		int ref_idx_l0[4];
+		int ref_idx_l1[4];
+	}smbp;
+}slice_data_t;
+
 
 /**
    Access unit delimiter
@@ -418,6 +464,9 @@ typedef struct
 	int NumberOfSliceGroups;
 
 	int MbaffFrameFlag;
+
+	int CodedBlockPatternLuma;
+	int CodedBlockPatternChroma;
 } h264_stream_t;
 
 h264_stream_t* h264_new();
@@ -591,6 +640,7 @@ extern FILE* h264_dbgfile;
 #define I_PCM 25
 #define P_8x8ref0 4
 #define B_Direct_8x8 0
+#define B_Direct_16x16 0
 
 typedef enum
 {
